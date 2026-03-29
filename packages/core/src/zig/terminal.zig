@@ -313,6 +313,10 @@ pub fn enableDetectedFeatures(self: *Terminal, tty: anytype, use_kitty_keyboard:
         try self.setColorSchemeUpdates(tty, true);
         try tty.writeAll(ansi.ANSI.colorSchemeRequest);
     }
+
+    if (self.state.mouse) {
+        try self.setMouseMode(tty, true, self.state.mouse_movement);
+    }
 }
 
 fn checkEnvironmentOverrides(self: *Terminal) void {
@@ -485,11 +489,36 @@ fn checkEnvironmentOverrides(self: *Terminal) void {
     }
 }
 
-// TODO: Allow pixel mouse mode to be enabled,
-// currently does not make sense and is not supported by higher levels
+fn capabilityModeSupported(response: []const u8, comptime mode: []const u8) bool {
+    return std.mem.indexOf(u8, response, mode ++ ";1$y") != null or
+        std.mem.indexOf(u8, response, mode ++ ";2$y") != null or
+        std.mem.indexOf(u8, response, mode ++ ";3$y") != null or
+        std.mem.indexOf(u8, response, mode ++ ";4$y") != null;
+}
+
+fn writeMouseMode(self: *Terminal, tty: anytype, enable_movement: bool) !void {
+    const pixel_mouse = self.state.pixel_mouse;
+
+    try tty.writeAll(ansi.ANSI.disableUtf8MouseMode);
+    try tty.writeAll(ansi.ANSI.disableUrxvtMouseMode);
+    try tty.writeAll(ansi.ANSI.enableSGRMouseMode);
+
+    if (!enable_movement) {
+        try tty.writeAll(ansi.ANSI.disableAnyEventTracking);
+        try tty.writeAll(ansi.ANSI.enableMouseTracking);
+        try tty.writeAll(ansi.ANSI.enableButtonEventTracking);
+    } else {
+        try tty.writeAll(ansi.ANSI.disableMouseTracking);
+        try tty.writeAll(ansi.ANSI.disableButtonEventTracking);
+        try tty.writeAll(ansi.ANSI.enableAnyEventTracking);
+    }
+
+    try tty.writeAll(if (pixel_mouse) ansi.ANSI.enableSGRPixelMouseMode else ansi.ANSI.disableSGRPixelMouseMode);
+}
+
 pub fn setMouseMode(self: *Terminal, tty: anytype, enable: bool, enable_movement: bool) !void {
     if (enable) {
-        if (self.state.mouse and self.state.mouse_movement == enable_movement) return;
+        if (self.state.mouse and self.state.mouse_movement == enable_movement and self.state.pixel_mouse) return;
     } else if (!self.state.mouse) {
         return;
     }
@@ -497,25 +526,18 @@ pub fn setMouseMode(self: *Terminal, tty: anytype, enable: bool, enable_movement
     if (enable) {
         self.state.mouse = true;
         self.state.mouse_movement = enable_movement;
-        if (!enable_movement) {
-            // Some terminals treat ?1000/?1002/?1003 as one family and let the
-            // last sequence win. Reset any-event tracking first, then enable
-            // click/drag modes so they remain active.
-            try tty.writeAll(ansi.ANSI.disableAnyEventTracking);
-        }
-        try tty.writeAll(ansi.ANSI.enableMouseTracking);
-        try tty.writeAll(ansi.ANSI.enableButtonEventTracking);
-        if (enable_movement) {
-            try tty.writeAll(ansi.ANSI.enableAnyEventTracking);
-        }
-        try tty.writeAll(ansi.ANSI.enableSGRMouseMode);
+        self.state.pixel_mouse = true;
+        try self.writeMouseMode(tty, enable_movement);
     } else {
         self.state.mouse = false;
         self.state.pixel_mouse = false;
+        try tty.writeAll(ansi.ANSI.disableSGRPixelMouseMode);
+        try tty.writeAll(ansi.ANSI.disableSGRMouseMode);
+        try tty.writeAll(ansi.ANSI.disableUrxvtMouseMode);
+        try tty.writeAll(ansi.ANSI.disableUtf8MouseMode);
         try tty.writeAll(ansi.ANSI.disableAnyEventTracking);
         try tty.writeAll(ansi.ANSI.disableButtonEventTracking);
         try tty.writeAll(ansi.ANSI.disableMouseTracking);
-        try tty.writeAll(ansi.ANSI.disableSGRMouseMode);
     }
 }
 
@@ -585,15 +607,7 @@ pub fn setColorSchemeUpdates(self: *Terminal, tty: anytype, enable: bool) !void 
 pub fn restoreTerminalModes(self: *Terminal, tty: anytype) !void {
     // Re-enable mouse tracking modes if active
     if (self.state.mouse) {
-        if (!self.state.mouse_movement) {
-            try tty.writeAll(ansi.ANSI.disableAnyEventTracking);
-        }
-        try tty.writeAll(ansi.ANSI.enableMouseTracking);
-        try tty.writeAll(ansi.ANSI.enableButtonEventTracking);
-        if (self.state.mouse_movement) {
-            try tty.writeAll(ansi.ANSI.enableAnyEventTracking);
-        }
-        try tty.writeAll(ansi.ANSI.enableSGRMouseMode);
+        try self.writeMouseMode(tty, self.state.mouse_movement);
     }
 
     // Re-enable focus tracking if active
@@ -629,22 +643,22 @@ pub fn restoreTerminalModes(self: *Terminal, tty: anytype) !void {
 /// Parsing these is not complete yet
 pub fn processCapabilityResponse(self: *Terminal, response: []const u8) void {
     // DECRPM responses
-    if (std.mem.indexOf(u8, response, "1016;2$y")) |_| {
+    if (capabilityModeSupported(response, "1016")) {
         self.caps.sgr_pixels = true;
     }
-    if (std.mem.indexOf(u8, response, "2027;2$y")) |_| {
+    if (capabilityModeSupported(response, "2027")) {
         self.caps.unicode = .unicode;
     }
-    if (std.mem.indexOf(u8, response, "2031;1$y") != null or std.mem.indexOf(u8, response, "2031;2$y") != null) {
+    if (capabilityModeSupported(response, "2031")) {
         self.caps.color_scheme_updates = true;
     }
-    if (std.mem.indexOf(u8, response, "1004;1$y") != null or std.mem.indexOf(u8, response, "1004;2$y") != null) {
+    if (capabilityModeSupported(response, "1004")) {
         self.caps.focus_tracking = true;
     }
-    if (std.mem.indexOf(u8, response, "2026;1$y") != null or std.mem.indexOf(u8, response, "2026;2$y") != null) {
+    if (capabilityModeSupported(response, "2026")) {
         self.caps.sync = true;
     }
-    if (std.mem.indexOf(u8, response, "2004;1$y") != null or std.mem.indexOf(u8, response, "2004;2$y") != null) {
+    if (capabilityModeSupported(response, "2004")) {
         self.caps.bracketed_paste = true;
     }
 

@@ -1,0 +1,78 @@
+name: Native Overlay Release
+
+on:
+  push:
+    tags:
+      - "gloomberb-opentui-v*"
+
+env:
+  ZIG_VERSION: 0.15.2
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build Native Overlay Assets
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Setup Zig
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Build patched native libraries
+        run: |
+          cd packages/core
+          bun run build:native --all
+
+      - name: Prepare release assets
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+
+          cp packages/core/node_modules/@opentui/core-darwin-x64/libopentui.dylib release-assets/opentui-darwin-x64.dylib
+          cp packages/core/node_modules/@opentui/core-darwin-arm64/libopentui.dylib release-assets/opentui-darwin-arm64.dylib
+          cp packages/core/node_modules/@opentui/core-linux-x64/libopentui.so release-assets/opentui-linux-x64.so
+          cp packages/core/node_modules/@opentui/core-linux-arm64/libopentui.so release-assets/opentui-linux-arm64.so
+          cp packages/core/node_modules/@opentui/core-win32-x64/opentui.dll release-assets/opentui-win32-x64.dll
+          cp packages/core/node_modules/@opentui/core-win32-arm64/opentui.dll release-assets/opentui-win32-arm64.dll
+
+          node <<'EOF'
+          const fs = require("node:fs")
+          const pkg = JSON.parse(fs.readFileSync("packages/core/package.json", "utf8"))
+          const manifest = {
+            packageVersion: pkg.version,
+            tag: process.env.GITHUB_REF_NAME,
+            assets: [
+              "opentui-darwin-x64.dylib",
+              "opentui-darwin-arm64.dylib",
+              "opentui-linux-x64.so",
+              "opentui-linux-arm64.so",
+              "opentui-win32-x64.dll",
+              "opentui-win32-arm64.dll",
+            ],
+          }
+          fs.writeFileSync("release-assets/manifest.json", JSON.stringify(manifest, null, 2))
+          EOF
+
+          ls -lah release-assets
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true

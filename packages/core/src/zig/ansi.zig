@@ -77,9 +77,12 @@ pub const ANSI = struct {
     pub const disableButtonEventTracking = "\x1b[?1002l";
     pub const enableAnyEventTracking = "\x1b[?1003h";
     pub const disableAnyEventTracking = "\x1b[?1003l";
+    pub const disableUtf8MouseMode = "\x1b[?1005l";
     pub const enableSGRMouseMode = "\x1b[?1006h";
     pub const disableSGRMouseMode = "\x1b[?1006l";
-    pub const mouseSetPixels = "\x1b[?1002;1003;1004;1016h";
+    pub const disableUrxvtMouseMode = "\x1b[?1015l";
+    pub const enableSGRPixelMouseMode = "\x1b[?1016h";
+    pub const disableSGRPixelMouseMode = "\x1b[?1016l";
 
     // Terminal capability queries
     pub const primaryDeviceAttrs = "\x1b[c";
