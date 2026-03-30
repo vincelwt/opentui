@@ -174,7 +174,10 @@ async function main() {
 
   probeBox.onMouseMove = updateUiState
   probeBox.onMouseDown = updateUiState
+  probeBox.onMouseUp = updateUiState
   probeBox.onMouseDrag = updateUiState
+  probeBox.onMouseDragEnd = updateUiState
+  probeBox.onMouseDrop = updateUiState
 
   const onStdin = (chunk: Buffer | string) => {
     const data = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
