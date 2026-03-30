@@ -667,6 +667,73 @@ describe("StdinParser", () => {
         p.destroy()
       }
     })
+
+    test("projects pixel-space sgr events into hit-testable cell coordinates", () => {
+      const p = createParser({
+        protocolContext: {
+          mouseUsesPixels: true,
+          terminalWidth: 141,
+          terminalHeight: 41,
+          pixelWidth: 2256,
+          pixelHeight: 1394,
+        },
+      })
+
+      try {
+        p.push(Buffer.from("\x1b[<35;731;715M"))
+        expect(snap(p)).toEqual([{
+          type: "mouse",
+          raw: "\x1b[<35;731;715M",
+          encoding: "sgr",
+          event: {
+            type: "move",
+            button: 0,
+            x: 45,
+            y: 20,
+            pixelX: 730,
+            pixelY: 714,
+            modifiers: { shift: false, alt: false, ctrl: false },
+          },
+        }])
+      } finally {
+        p.destroy()
+      }
+    })
+
+    test("pixel confirmation latches after the first pixel event", () => {
+      const p = createParser({
+        protocolContext: {
+          mouseUsesPixels: true,
+          terminalWidth: 141,
+          terminalHeight: 41,
+          pixelWidth: 2256,
+          pixelHeight: 1394,
+        },
+      })
+
+      try {
+        p.push(Buffer.from("\x1b[<35;731;715M"))
+        expect(snap(p)).toHaveLength(1)
+
+        p.push(Buffer.from("\x1b[<35;11;12M"))
+        expect(snap(p)).toEqual([{
+          type: "mouse",
+          raw: "\x1b[<35;11;12M",
+          encoding: "sgr",
+          event: {
+            type: "move",
+            button: 0,
+            x: 0,
+            y: 0,
+            pixelX: 10,
+            pixelY: 11,
+            modifiers: { shift: false, alt: false, ctrl: false },
+          },
+        }])
+      } finally {
+        p.destroy()
+      }
+    })
   })
 
   describe("mouse: X10 protocol", () => {

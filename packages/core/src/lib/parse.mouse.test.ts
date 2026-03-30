@@ -550,3 +550,49 @@ describe("MouseParser protocol precedence", () => {
     expect(e.y).toBe(5)
   })
 })
+
+describe("MouseParser pixel-aware SGR mode", () => {
+  let parser: MouseParser
+
+  beforeEach(() => {
+    parser = new MouseParser()
+  })
+
+  test("projects pixel coordinates back into cell space while preserving raw pixels", () => {
+    const e = parser.parseMouseEvent(encodeSGR(35, 730, 714, true), {
+      mouseUsesPixels: true,
+      mousePixelsConfirmed: false,
+      terminalWidth: 141,
+      terminalHeight: 41,
+      pixelWidth: 2256,
+      pixelHeight: 1394,
+    })!
+
+    expect(e).toMatchObject({
+      type: "move",
+      x: 45,
+      y: 20,
+      pixelX: 730,
+      pixelY: 714,
+    })
+  })
+
+  test("confirmed pixel mode preserves pixel coordinates even for small values", () => {
+    const e = parser.parseMouseEvent(encodeSGR(35, 10, 11, true), {
+      mouseUsesPixels: true,
+      mousePixelsConfirmed: true,
+      terminalWidth: 141,
+      terminalHeight: 41,
+      pixelWidth: 2256,
+      pixelHeight: 1394,
+    })!
+
+    expect(e).toMatchObject({
+      type: "move",
+      x: 0,
+      y: 0,
+      pixelX: 10,
+      pixelY: 11,
+    })
+  })
+})

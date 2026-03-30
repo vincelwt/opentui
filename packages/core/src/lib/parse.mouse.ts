@@ -5,11 +5,22 @@ export interface ScrollInfo {
   delta: number
 }
 
+export interface MouseParserContext {
+  mouseUsesPixels?: boolean
+  mousePixelsConfirmed?: boolean
+  terminalWidth?: number
+  terminalHeight?: number
+  pixelWidth?: number
+  pixelHeight?: number
+}
+
 export type RawMouseEvent = {
   type: MouseEventType
   button: number
   x: number
   y: number
+  pixelX?: number
+  pixelY?: number
   modifiers: { shift: boolean; alt: boolean; ctrl: boolean }
   scroll?: ScrollInfo
 }
@@ -40,19 +51,32 @@ export class MouseParser {
     return buf.toString("latin1")
   }
 
-  public parseMouseEvent(data: Buffer | Uint8Array): RawMouseEvent | null {
+  private projectPixelToCell(pixel: number, pixelExtent: number, cellCount: number): number {
+    if (cellCount <= 1) {
+      return 0
+    }
+
+    if (!(pixelExtent > 1)) {
+      return Math.max(Math.floor(pixel), 0)
+    }
+
+    const ratio = Math.max(0, Math.min(pixel / Math.max(pixelExtent - 1, 1), 1))
+    return Math.floor(ratio * Math.max(cellCount - 1, 0))
+  }
+
+  public parseMouseEvent(data: Buffer | Uint8Array, context?: MouseParserContext): RawMouseEvent | null {
     const str = this.decodeInput(data)
-    const parsed = this.parseMouseSequenceAt(str, 0)
+    const parsed = this.parseMouseSequenceAt(str, 0, context)
     return parsed?.event ?? null
   }
 
-  public parseAllMouseEvents(data: Buffer | Uint8Array): RawMouseEvent[] {
+  public parseAllMouseEvents(data: Buffer | Uint8Array, context?: MouseParserContext): RawMouseEvent[] {
     const str = this.decodeInput(data)
     const events: RawMouseEvent[] = []
     let offset = 0
 
     while (offset < str.length) {
-      const parsed = this.parseMouseSequenceAt(str, offset)
+      const parsed = this.parseMouseSequenceAt(str, offset, context)
       if (!parsed) {
         // Stop at the first non-mouse sequence. Callers can decide whether to
         // route any remaining data through keyboard/terminal input handling.
@@ -66,12 +90,12 @@ export class MouseParser {
     return events
   }
 
-  private parseMouseSequenceAt(str: string, offset: number): ParsedMouseSequence | null {
+  private parseMouseSequenceAt(str: string, offset: number, context?: MouseParserContext): ParsedMouseSequence | null {
     if (!str.startsWith("\x1b[", offset)) return null
     const introducer = str[offset + 2]
 
     if (introducer === "<") {
-      return this.parseSgrSequence(str, offset)
+      return this.parseSgrSequence(str, offset, context)
     }
 
     if (introducer === "M") {
@@ -81,7 +105,7 @@ export class MouseParser {
     return null
   }
 
-  private parseSgrSequence(str: string, offset: number): ParsedMouseSequence | null {
+  private parseSgrSequence(str: string, offset: number, context?: MouseParserContext): ParsedMouseSequence | null {
     let index = offset + 3
     const values = [0, 0, 0]
     let part = 0
@@ -111,7 +135,7 @@ export class MouseParser {
           if (!hasDigit || part !== 2) return null
 
           return {
-            event: this.decodeSgrEvent(values[0]!, values[1]!, values[2]!, char),
+            event: this.decodeSgrEvent(values[0]!, values[1]!, values[2]!, char, context),
             consumed: index - offset + 1,
           }
         }
@@ -138,7 +162,13 @@ export class MouseParser {
     }
   }
 
-  private decodeSgrEvent(rawButtonCode: number, wireX: number, wireY: number, pressRelease: "M" | "m"): RawMouseEvent {
+  private decodeSgrEvent(
+    rawButtonCode: number,
+    wireX: number,
+    wireY: number,
+    pressRelease: "M" | "m",
+    context?: MouseParserContext,
+  ): RawMouseEvent {
     const button = rawButtonCode & 3
     const isScroll = (rawButtonCode & 64) !== 0
     const scrollDirection = !isScroll ? undefined : MouseParser.SCROLL_DIRECTIONS[button]
@@ -179,11 +209,27 @@ export class MouseParser {
       }
     }
 
+    const pixelModeRequested = context?.mouseUsesPixels === true
+    const pixelModeConfirmed = context?.mousePixelsConfirmed === true
+    const pixelModeDetected = pixelModeRequested && (
+      pixelModeConfirmed
+      || wireX > (context?.terminalWidth ?? Number.POSITIVE_INFINITY)
+      || wireY > (context?.terminalHeight ?? Number.POSITIVE_INFINITY)
+    )
+    const pixelX = pixelModeDetected ? Math.max(wireX - 1, 0) : undefined
+    const pixelY = pixelModeDetected ? Math.max(wireY - 1, 0) : undefined
+
     return {
       type,
       button: button === 3 ? 0 : button,
-      x: wireX - 1,
-      y: wireY - 1,
+      x: pixelModeDetected && pixelX !== undefined
+        ? this.projectPixelToCell(pixelX, context?.pixelWidth ?? 0, context?.terminalWidth ?? 0)
+        : wireX - 1,
+      y: pixelModeDetected && pixelY !== undefined
+        ? this.projectPixelToCell(pixelY, context?.pixelHeight ?? 0, context?.terminalHeight ?? 0)
+        : wireY - 1,
+      pixelX,
+      pixelY,
       modifiers,
       scroll: scrollInfo,
     }

@@ -210,6 +210,8 @@ export class MouseEvent {
   public readonly button: number
   public readonly x: number
   public readonly y: number
+  public readonly pixelX?: number
+  public readonly pixelY?: number
   public readonly source?: Renderable
   public readonly modifiers: {
     shift: boolean
@@ -236,6 +238,8 @@ export class MouseEvent {
     this.button = attributes.button
     this.x = attributes.x
     this.y = attributes.y
+    this.pixelX = attributes.pixelX
+    this.pixelY = attributes.pixelY
     this.modifiers = attributes.modifiers
     this.scroll = attributes.scroll
     this.source = attributes.source
@@ -460,7 +464,7 @@ export class CliRenderer extends EventEmitter implements RenderContext {
     this.handleResize(width, height)
   }).bind(this)
   private _capabilities: any | null = null
-  private _latestPointer: { x: number; y: number } = { x: 0, y: 0 }
+  private _latestPointer: { x: number; y: number; pixelX?: number; pixelY?: number } = { x: 0, y: 0 }
   private _hasPointer: boolean = false
   private _lastPointerModifiers: RawMouseEvent["modifiers"] = { shift: false, alt: false, ctrl: false }
   private _currentMousePointerStyle: MousePointerStyle | undefined = undefined
@@ -650,6 +654,12 @@ export class CliRenderer extends EventEmitter implements RenderContext {
         privateCapabilityRepliesActive: false,
         pixelResolutionQueryActive: false,
         explicitWidthCprActive: false,
+        mouseUsesPixels: false,
+        mousePixelsConfirmed: false,
+        terminalWidth: this._terminalWidth,
+        terminalHeight: this._terminalHeight,
+        pixelWidth: 0,
+        pixelHeight: 0,
       },
       clock: this.clock,
     })
@@ -1059,6 +1069,7 @@ export class CliRenderer extends EventEmitter implements RenderContext {
   private enableMouse(): void {
     this._useMouse = true
     this.lib.enableMouse(this.rendererPtr, this.enableMouseMovement)
+    this.syncMouseParserProtocolContext(true)
   }
 
   private disableMouse(): void {
@@ -1066,6 +1077,7 @@ export class CliRenderer extends EventEmitter implements RenderContext {
     this.setCapturedRenderable(undefined)
     this.stdinParser?.resetMouseState()
     this.lib.disableMouse(this.rendererPtr)
+    this.syncMouseParserProtocolContext(true)
   }
 
   public enableKittyKeyboard(flags: number = 0b00011): void {
@@ -1121,6 +1133,7 @@ export class CliRenderer extends EventEmitter implements RenderContext {
       this.enableMouse()
     }
 
+    this.syncMouseParserProtocolContext()
     this.queryPixelResolution()
   }
 
@@ -1154,6 +1167,23 @@ export class CliRenderer extends EventEmitter implements RenderContext {
     if (drain) this.drainStdinParser()
   }
 
+  private syncMouseParserProtocolContext(resetConfirmation = false): void {
+    const mouseUsesPixels = Boolean(this._useMouse && this._capabilities?.sgr_pixels === true)
+    const patch: Partial<StdinParserProtocolContext> = {
+      mouseUsesPixels,
+      terminalWidth: this._terminalWidth,
+      terminalHeight: this._terminalHeight,
+      pixelWidth: this._resolution?.width ?? 0,
+      pixelHeight: this._resolution?.height ?? 0,
+    }
+
+    if (resetConfirmation || !mouseUsesPixels) {
+      patch.mousePixelsConfirmed = false
+    }
+
+    this.updateStdinParserProtocolContext(patch)
+  }
+
   public subscribeOsc(handler: (sequence: string) => void): () => void {
     this.oscSubscribers.add(handler)
     return () => {
@@ -1165,6 +1195,7 @@ export class CliRenderer extends EventEmitter implements RenderContext {
     if (isCapabilityResponse(sequence)) {
       this.lib.processCapabilityResponse(this.rendererPtr, sequence)
       this._capabilities = this.lib.getTerminalCapabilities(this.rendererPtr)
+      this.syncMouseParserProtocolContext()
       this.emit(CliRenderEvents.CAPABILITIES, this._capabilities)
       return true
     }
@@ -1300,6 +1331,7 @@ export class CliRenderer extends EventEmitter implements RenderContext {
         }
         this.waitingForPixelResolution = false
         this.updateStdinParserProtocolContext({ pixelResolutionQueryActive: false }, true)
+        this.syncMouseParserProtocolContext()
         return true
       }
       return false
@@ -1343,10 +1375,16 @@ export class CliRenderer extends EventEmitter implements RenderContext {
         return false
       }
       mouseEvent.y -= this.renderOffset
+      if (mouseEvent.pixelY !== undefined && this._resolution) {
+        const cellHeight = this._resolution.height / Math.max(this._terminalHeight, 1)
+        mouseEvent.pixelY = Math.max(mouseEvent.pixelY - this.renderOffset * cellHeight, 0)
+      }
     }
 
     this._latestPointer.x = mouseEvent.x
     this._latestPointer.y = mouseEvent.y
+    this._latestPointer.pixelX = mouseEvent.pixelX
+    this._latestPointer.pixelY = mouseEvent.pixelY
     this._hasPointer = true
     this._lastPointerModifiers = mouseEvent.modifiers
 
@@ -1526,6 +1564,8 @@ export class CliRenderer extends EventEmitter implements RenderContext {
       button: 0,
       x: this._latestPointer.x,
       y: this._latestPointer.y,
+      pixelX: this._latestPointer.pixelX,
+      pixelY: this._latestPointer.pixelY,
       modifiers: this._lastPointerModifiers,
     }
 
@@ -1622,7 +1662,11 @@ export class CliRenderer extends EventEmitter implements RenderContext {
 
   private queryPixelResolution() {
     this.waitingForPixelResolution = true
-    this.updateStdinParserProtocolContext({ pixelResolutionQueryActive: true })
+    this.updateStdinParserProtocolContext({
+      pixelResolutionQueryActive: true,
+      terminalWidth: this._terminalWidth,
+      terminalHeight: this._terminalHeight,
+    })
     this.lib.queryPixelResolution(this.rendererPtr)
   }
 
@@ -1633,6 +1677,7 @@ export class CliRenderer extends EventEmitter implements RenderContext {
 
     this._terminalWidth = width
     this._terminalHeight = height
+    this.syncMouseParserProtocolContext(true)
     this.queryPixelResolution()
 
     this.setCapturedRenderable(undefined)

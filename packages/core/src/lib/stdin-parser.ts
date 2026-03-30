@@ -45,6 +45,12 @@ export interface StdinParserProtocolContext {
   privateCapabilityRepliesActive: boolean
   pixelResolutionQueryActive: boolean
   explicitWidthCprActive: boolean
+  mouseUsesPixels: boolean
+  mousePixelsConfirmed: boolean
+  terminalWidth: number
+  terminalHeight: number
+  pixelWidth: number
+  pixelHeight: number
 }
 
 export interface StdinParserOptions {
@@ -111,6 +117,12 @@ const DEFAULT_PROTOCOL_CONTEXT: StdinParserProtocolContext = {
   privateCapabilityRepliesActive: false,
   pixelResolutionQueryActive: false,
   explicitWidthCprActive: false,
+  mouseUsesPixels: false,
+  mousePixelsConfirmed: false,
+  terminalWidth: 0,
+  terminalHeight: 0,
+  pixelWidth: 0,
+  pixelHeight: 0,
 }
 // rxvt uses $-terminated CSI sequences for shifted function keys (e.g. ESC[2$).
 // Standard CSI treats $ as an intermediate byte, not a final, so we match these
@@ -536,6 +548,12 @@ export class StdinParser {
       privateCapabilityRepliesActive: options.protocolContext?.privateCapabilityRepliesActive ?? false,
       pixelResolutionQueryActive: options.protocolContext?.pixelResolutionQueryActive ?? false,
       explicitWidthCprActive: options.protocolContext?.explicitWidthCprActive ?? false,
+      mouseUsesPixels: options.protocolContext?.mouseUsesPixels ?? false,
+      mousePixelsConfirmed: options.protocolContext?.mousePixelsConfirmed ?? false,
+      terminalWidth: options.protocolContext?.terminalWidth ?? 0,
+      terminalHeight: options.protocolContext?.terminalHeight ?? 0,
+      pixelWidth: options.protocolContext?.pixelWidth ?? 0,
+      pixelHeight: options.protocolContext?.pixelHeight ?? 0,
     }
   }
 
@@ -1547,10 +1565,14 @@ export class StdinParser {
   }
 
   private emitMouse(rawBytes: Uint8Array, encoding: "sgr" | "x10"): void {
-    const event = this.mouseParser.parseMouseEvent(rawBytes)
+    const event = this.mouseParser.parseMouseEvent(rawBytes, this.protocolContext)
     if (!event) {
       this.emitOpaqueResponse("unknown", rawBytes)
       return
+    }
+
+    if (event.pixelX !== undefined && event.pixelY !== undefined && !this.protocolContext.mousePixelsConfirmed) {
+      this.updateProtocolContext({ mousePixelsConfirmed: true })
     }
 
     this.events.push({
